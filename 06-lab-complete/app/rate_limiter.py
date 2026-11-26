@@ -1,14 +1,52 @@
 """
 Rate limiting (tiêu chí 7).
 
-Yêu cầu:
   • Mỗi API key tối đa RATE_LIMIT_PER_MINUTE request trong 60 giây (sliding window)
-  • Vượt giới hạn → HTTP 429, nên kèm header Retry-After
-  • State lưu trong Redis để mọi worker / instance dùng chung và vẫn còn sau khi
-    restart agent (script chấm sẽ restart agent để kiểm tra)
+  • Vượt giới hạn → HTTP 429 kèm header Retry-After
+  • State lưu trong Redis (sorted set) để mọi worker / instance dùng chung và vẫn còn
+    sau khi restart agent
 """
+import hashlib
+import time
+import uuid
+
+from fastapi import HTTPException
+
+from app.config import settings
+from app.redis_client import r
+
+WINDOW_SECONDS = 60
+
+
+def _bucket(key: str) -> str:
+    # Không lưu API key thô trong Redis, chỉ lưu hash
+    return "ratelimit:" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
 def check_rate_limit(key: str) -> None:
-    # TODO: gợi ý dùng Redis sorted set: ZREMRANGEBYSCORE → ZCARD → ZADD → EXPIRE
-    raise NotImplementedError("TODO: check_rate_limit")
+    limit = settings.rate_limit_per_minute
+    bucket = _bucket(key)
+    now = time.time()
+    member = f"{now:.6f}-{uuid.uuid4().hex[:8]}"
+
+    # Một transaction MULTI/EXEC: xoá request cũ → thêm request này → đếm → đặt TTL.
+    # Thêm trước rồi đếm để 2 worker chạy song song không cùng "lọt" qua giới hạn.
+    pipe = r.pipeline(transaction=True)
+    pipe.zremrangebyscore(bucket, 0, now - WINDOW_SECONDS)
+    pipe.zadd(bucket, {member: now})
+    pipe.zcard(bucket)
+    pipe.expire(bucket, WINDOW_SECONDS + 5)
+    _, _, count, _ = pipe.execute()
+
+    if count > limit:
+        r.zrem(bucket, member)  # request bị chặn không tính vào cửa sổ
+        oldest = r.zrange(bucket, 0, 0, withscores=True)
+        retry_after = int(oldest[0][1] + WINDOW_SECONDS - now) + 1 if oldest else WINDOW_SECONDS
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "Rate limit exceeded", "limit_per_minute": limit,
+                    "retry_after_seconds": retry_after},
+            headers={"Retry-After": str(max(retry_after, 1)),
+                     "X-RateLimit-Limit": str(limit),
+                     "X-RateLimit-Remaining": "0"},
+        )
