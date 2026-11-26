@@ -160,7 +160,7 @@ Sơ đồ (đọc từ `docker-compose.yml` và `nginx/nginx.conf`):
 
 Có 4 service được start: `agent`, `redis`, `qdrant`, `nginx`. Chỉ Nginx publish port ra host. Các service nói chuyện với nhau qua network `internal` bằng tên service (DNS nội bộ của Docker: `agent:8000`, `redis:6379`, `qdrant:6333`). Agent chỉ start khi Redis và Qdrant đã healthy.
 
-(*) Trên máy này cổng 80 của Windows đang bị dịch vụ hệ thống HTTP.sys (PID 4) giữ, nên `nginx` báo `ports are not available: 0.0.0.0:80`. Mình không sửa `docker-compose.yml` của đề mà dùng thêm một file override ngoài repo (`ports: !override ["8088:80"]`) để map Nginx ra cổng 8088.
+(*) Trên máy này cổng 80 của Windows đang bị dịch vụ hệ thống HTTP.sys (PID 4) giữ, nên `nginx` báo `ports are not available: 0.0.0.0:80`. Em không sửa `docker-compose.yml` của đề mà dùng thêm một file override ngoài repo (`ports: !override ["8088:80"]`) để map Nginx ra cổng 8088.
 
 ```text
 $ ls -la .env.local          # đã tạo bằng touch, để trống
@@ -196,7 +196,7 @@ Header `Server: nginx` và các security header chứng minh request đi qua Ngi
 
 ## Part 3: Cloud Deployment
 
-Theo điều chỉnh K5, mình deploy **chính agent Part 6** (`06-lab-complete/`), không deploy app mẫu trong `03-cloud-deployment/`. Chi tiết và lệnh test: [DEPLOYMENT.md](DEPLOYMENT.md).
+Theo điều chỉnh K5, em deploy **chính agent Part 6** (`06-lab-complete/`), không deploy app mẫu trong `03-cloud-deployment/`. Chi tiết và lệnh test: [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ### Exercise 3.2: Render (nền tảng chính)
 
@@ -208,7 +208,7 @@ Theo điều chỉnh K5, mình deploy **chính agent Part 6** (`06-lab-complete/
 
 ### So sánh `railway.toml` và `render.yaml` (nền tảng còn lại)
 
-So sánh hai file mình viết trong `06-lab-complete/` (và hai file mẫu trong `03-cloud-deployment/`):
+So sánh hai file em viết trong `06-lab-complete/` (và hai file mẫu trong `03-cloud-deployment/`):
 
 | Khía cạnh | `railway.toml` | `render.yaml` |
 |---|---|---|
@@ -329,7 +329,7 @@ $ curl -s http://localhost:8000/me/usage -H "Authorization: Bearer $TOKEN"
 **Rate limit và cost guard khác nhau thế nào, vì sao cần cả hai:**
 - **Rate limit bảo vệ tốc độ:** giới hạn *số request trong một khoảng thời gian* để chống spam, brute force và một client làm nghẽn server. Nó không quan tâm request đắt hay rẻ.
 - **Cost guard bảo vệ tiền:** giới hạn *tổng chi phí token* trong ngày/tháng. Một user gửi ít request nhưng mỗi câu rất dài (nhiều token) vẫn lọt qua rate limit nhưng có thể đốt hết budget; ngược lại rate limit chặn được bão request rẻ mà cost guard chưa kịp thấy.
-- Vì vậy cần cả hai lớp. Bản demo này lưu trong RAM; bản production thật phải lưu trong Redis (key theo user + ngày/tháng, `INCRBYFLOAT`, `EXPIRE`) để nhiều instance dùng chung và không mất khi restart. Đó chính là cách mình làm ở Part 6.
+- Vì vậy cần cả hai lớp. Bản demo này lưu trong RAM; bản production thật phải lưu trong Redis (key theo user + ngày/tháng, `INCRBYFLOAT`, `EXPIRE`) để nhiều instance dùng chung và không mất khi restart. Đó chính là cách em làm ở Part 6.
 
 ---
 
@@ -552,18 +552,21 @@ exit code: 0
 
 ## AI log
 
-Công cụ: **Claude Code** (desktop app, model Claude Opus 5.5), dùng ngày 26/11/2026. Khai báo theo RULES mục 1: AI được dùng nhiều trong bài này. Claude chạy lệnh trên máy mình (WSL2 + Docker) theo kế hoạch mình soạn trước, còn mình theo dõi và kiểm tra từng mốc. Mọi số đo đều lấy từ lệnh chạy thật; không có số nào do AI tự đặt ra.
+Công cụ: Claude Code (desktop app), dùng ngày 26/11/2026. Cách làm: em soạn kế hoạch theo các mốc CP0–CP8 (kèm các điều chỉnh K5 trong README), Claude chạy lệnh và soạn bản nháp code/tài liệu theo kế hoạch đó trên máy em (WSL2 + Docker). Em theo dõi từng bước, kiểm tra kết quả và yêu cầu sửa khi chưa khớp. Số đo trong bài đều lấy từ lệnh đã chạy và các file trong `reports/`, `benchmark-results/`.
 
-| # | Hỏi / giao việc gì | AI làm gì, trả lại gì | Mình kiểm tra thế nào |
+| # | Việc | Claude hỗ trợ gì | Em đã kiểm tra thế nào |
 |---|---|---|---|
-| 1 | Đọc đề (README → RULES → CHECKPOINTS → SUBMISSION → RUBRIC) và kiểm tra repo | Tóm tắt yêu cầu, chỉ ra repo chưa có bài làm, Part 6 đang 0/12 | Tự đọc lại RUBRIC và đối chiếu bằng `--static-only` |
-| 2 | Môi trường: vì sao phải dùng WSL | Giải thích SIGTERM trên Windows; kiểm tra WSL có Python 3.10, thiếu pip; cài Python 3.11.18 (deadsnakes, qua `wsl -u root`), tạo `.venv` và cài requirements | `python -c "import os; print(os.name)"` → `posix`; `python --version` → 3.11.18; `git status` sạch (`.venv` đã ignore) |
-| 3 | CP1, CP2, CP4: chạy ví dụ Part 1, 2, 5 và ghi kết quả | Chạy app, build image, compose (`-p` riêng), `test_stateless.py`; soạn câu trả lời dựa trên output thật và dòng code cụ thể. Phát hiện cổng 80 bị HTTP.sys giữ nên dùng file override ngoài repo để map Nginx ra 8088; phát hiện lỗi log JSON của Part 1 production do `basicConfig` | Xem lại từng output trong bài; kiểm tra số MB bằng `docker image inspect`; đối chiếu bảng so sánh với code |
-| 4 | CP3: Part 4 (API key, JWT, rate limit, cost guard) | Chạy develop và production, lấy token `student`, vòng lặp 20 request; che token bằng `sed` | Kiểm tra output không còn token (`grep` đếm 0 lần xuất hiện); thấy đủ 401/403/200/429 |
-| 5 | CP5: viết code Part 6 | Viết `config.py`, `auth.py`, `redis_client.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`, Dockerfile, compose, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml` theo đúng "hợp đồng" trong README; không sửa `check_production_ready.py` | `check_production_ready.py` đầy đủ trong WSL: **PASS 12/12** (chạy 3 lần, kể cả sau khi chỉnh nhỏ timeout Redis và tên field log). Tự test thêm bằng tay 401/422/429/402 và Redis chết. Đọc lại từng file để giải thích được với Lab Coach |
-| 6 | CP6: deploy | Mình đăng nhập Render; Claude hỏi trước rồi mới commit + push, tạo Blueprint từ URL repo public, chạy 4 lệnh tự kiểm, chụp ảnh dashboard | 4 lệnh trả 200/200/401/200; grader `--public-url` ✅. Không commit key; key chỉ dùng trong header curl và được che trong ảnh và log |
-| 7 | CP7: Part 7 bước 1 | Thêm histogram `agent_question_length_chars`; chạy 7 load test + 3 eval với `--out`; thêm 2 entry `KNOWLEDGE_BASE` cho `security-02`, `scaling-03`; viết workflow `quality-gate.yml` | `eval_v2_fixed.json` 23/23, 0 regression; `git diff golden_dataset.jsonl` trống; bảng số trong report đối chiếu với JSON |
-| 8 | CP8: Part 7 bước 2 | Bật stack, phát hiện và sửa lỗi `PYTHONUSERBASE` trong Dockerfile production; làm thí nghiệm A–E (script đo thời gian alert qua Prometheus API); tìm trace qua Jaeger API v3; chụp ảnh bằng Chrome headless (Playwright); chạy Locust headless 1 và 3 instance | Xem từng ảnh; `trace_id` trong report khớp dòng log JSON đã grep; số scaling khớp `scale_*_stats.csv`; dọn stack bằng `down -v` |
-| 9 | Viết `BENCHMARK_REPORT.md`, `DEPLOYMENT.md`, phần còn lại của file này | Soạn nội dung từ các file kết quả | Đọc lại toàn bộ; mọi số lấy từ JSON/CSV/log; không có email hay số điện thoại; tên và MSSV chỉ ở tên repo và ô Họ tên |
+| 1 | Đọc đề, lên kế hoạch | Tóm tắt README → RULES → CHECKPOINTS → SUBMISSION → RUBRIC; chạy `check_production_ready.py --static-only` ban đầu (0/12) | Em soạn kế hoạch chi tiết cho từng CP và đặt ràng buộc: không sửa script chấm và golden dataset, che token/key khi dán output, commit không ghi đồng tác giả, hỏi em trước khi push |
+| 2 | Môi trường | Kiểm tra WSL (Python 3.10, thiếu pip), cài Python 3.11.18 và tạo `.venv` | Em chọn làm toàn bộ trong WSL theo lưu ý số 2 của README; kiểm tra `os.name` = `posix`, Python 3.11.18, `.venv` không bị đưa vào git |
+| 3 | CP1, CP2, CP4 (Part 1, 2, 5) | Chạy ví dụ, build image, chạy compose với `-p` riêng, chạy `test_stateless.py`; nháp câu trả lời từ output | Em đối chiếu kích thước image trong bài (1667.8 MB / 239.8 MB, giảm 85.6%) với output `docker image inspect`. Cổng 80 bị HTTP.sys giữ nên dùng file override ngoài repo map Nginx ra 8088, không sửa compose của đề. Em yêu cầu thêm bước dừng 1 agent để thử stateless vì script không tự tắt instance |
+| 4 | CP3 (Part 4) | Chạy bản develop và production, vòng lặp 20 request | Em kiểm tra output đủ 401 / 403 / 200 / 429 và token đã được che (đếm 0 lần xuất hiện token trong file output) |
+| 5 | CP5 (Part 6) | Nháp code cho các file TODO, Dockerfile, compose, cấu hình deploy theo bảng "hợp đồng" | Em chạy `check_production_ready.py` bản đầy đủ trong WSL: PASS 12/12, 43/43. Em kiểm thêm bằng tay: input sai → 422, budget nhỏ → 402, dừng Redis → `/health` 200, `/ready` 503. Em dùng phát hiện ở Part 1 (log JSON mất do `basicConfig`) làm lý do cho cách gắn handler JSON riêng |
+| 6 | CP6 (Part 3) | Tạo Blueprint từ URL repo public, chạy 4 lệnh tự kiểm, chụp ảnh dashboard | Em chọn Render, tự đăng nhập Render và duyệt việc commit + push trước khi deploy. Em kiểm tra 4 lệnh trả 200 / 200 / 401 / 200 và grader `--public-url` báo ✅. Key chỉ dùng trong header curl, không nằm trong file nào của repo |
+| 7 | CP7 (Part 7 bước 1) | Thêm histogram `agent_question_length_chars`; chạy 7 load test và 3 eval với `--out`; nháp 2 entry `KNOWLEDGE_BASE` và workflow CI | Em kiểm tra keyword mới chỉ khớp 2 câu sai (`security-02`, `scaling-03`) để tránh regression; eval cuối 23/23, 0 regression; `git diff golden_dataset.jsonl` trống |
+| 8 | CP8 (Part 7 bước 2) | Bật stack, sửa thiếu `PYTHONUSERBASE` trong Dockerfile production, chạy thí nghiệm A–E, tìm trace qua Jaeger API, chụp ảnh, chạy Locust 1 và 3 instance | Em đối chiếu `trace_id` trong báo cáo với dòng log JSON đã grep, số scaling với `scale_*_stats.csv`. Ảnh trace và log ban đầu bị mất khi container được tạo lại, nên em yêu cầu lấy lại từ container hiện tại trước khi dọn stack |
+| 9 | Rà soát trước khi nộp | Sửa tài liệu theo góp ý của em | Em rà lại và yêu cầu sửa 5 điểm: (a) mô tả CI cho đúng workflow (chỉ kiểm accuracy ≥ 85%, không so baseline; chưa có PR; `main` chưa bật branch protection, đã kiểm qua GitHub API: `"protected": false`); (b) mục 2.1: từ concurrency 10 lên 50 RPS chỉ tăng 2.68 lần chứ không tuyến tính, còn nguyên nhân ở mức 100 chỉ là giả thuyết; (c) bổ sung 2 câu trả lời của Exercise 7.1 từ output `/metrics` chạy lại; (d) làm rõ $2.x là tốc độ chi phí mô phỏng theo giờ, còn tổng chi phí cộng dồn lúc đó là $0.5984 và không có tiền thật bị tính; (e) viết lại AI log này |
 
-Điều mình tự rút ra khi kiểm tra: (1) bẫy `logging.basicConfig` bị vô hiệu ở Part 1 nên Part 6 phải tự gắn handler JSON; (2) thiếu `PYTHONUSERBASE` khiến user non-root không thấy package (đúng lỗi CODE_LAB cảnh báo); (3) tạo lại tất cả instance cùng lúc gây hàng trăm lỗi 502 ở Nginx mà metric agent không thấy.
+Điều em rút ra từ kết quả đo:
+- Ở 30 user, alert `LLMCostBurnRateHigh` (ngưỡng $2/giờ) đã firing khi tải bình thường. Ngưỡng cost nên đặt theo traffic và budget dự kiến.
+- Tạo lại cả 2 agent cùng lúc làm Nginx trả khoảng 220–240 lỗi 502 mà metric của agent không ghi nhận. Cần giám sát cả ở tầng load balancer.
+- Scale từ 1 lên 3 instance không đổi RPS (60.34 → 60.41) vì tải Locust bị giới hạn bởi số user và thời gian nghỉ; latency chủ yếu nằm ở span LLM.

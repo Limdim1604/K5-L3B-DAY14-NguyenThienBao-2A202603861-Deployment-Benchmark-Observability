@@ -1,6 +1,7 @@
 # Exercise 7.3 — Quality gate: chạy eval trên golden dataset cho mỗi pull request.
-# run_eval.py trả exit code 1 khi accuracy < --min-accuracy hoặc có regression
-# → step fail → job fail → bật branch protection "Require status checks" là PR không merge được.
+# Job này chỉ kiểm accuracy ≥ 85% (không truyền --baseline nên không so regression với phiên bản trước).
+# run_eval.py trả exit code 1 khi accuracy < --min-accuracy → step fail → job fail.
+# Muốn PR fail thì không merge được: bật branch protection "Require status checks" cho main.
 name: quality-gate
 
 on:

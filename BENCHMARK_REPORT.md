@@ -14,7 +14,7 @@
 |---|---|---|
 | p95 latency `/ask` | < **500 ms** (đo bằng `load_test.py`); alert production cảnh báo khi > 1 s kéo dài 2 phút | Mock LLM mất khoảng 120–180 ms + 20 ms retrieval, nên p50 khoảng 190 ms. Đặt 500 ms là gấp khoảng 2.5 lần p50 bình thường: đủ chỗ cho jitter, nhưng 5% request chậm bất thường (+1.5 s) sẽ làm vỡ SLO ngay. Đặt theo p95 vì người dùng cảm nhận theo request chậm, không theo trung bình |
 | Error rate `/ask` | < **2 %** (load test); alert khi > 5% trong 1 phút | Upstream LLM tự có khoảng 1% lỗi (`MOCK_ERROR_RATE=0.01`), nên 2% là "bình thường cộng biên an toàn". Alert 5% để tránh báo động giả do dao động ngắn |
-| Accuracy trên golden dataset | ≥ **85 %** để được merge (CI); bản release thực tế đạt **100%** (23/23) và không có regression | 85% cho phép vài câu khó chưa có tài liệu trong knowledge base, nhưng chặn được thay đổi làm agent tệ hẳn (v1 chỉ 4.3%). Ngoài ngưỡng tuyệt đối, gate còn so `--baseline` để chặn mọi câu từng đúng mà nay sai |
+| Accuracy trên golden dataset | ≥ **85 %**: ngưỡng của job CI `quality-gate` trên pull request (chỉ kiểm accuracy, không so baseline). Kiểm tra regression hiện mới làm ở local: lần eval cuối dùng `--min-accuracy 1.0 --baseline reports/eval_v2.json` và đạt 23/23, 0 regression | 85% cho phép vài câu khó chưa có tài liệu trong knowledge base, nhưng vẫn bắt được thay đổi làm agent tệ hẳn (v1 chỉ 4.3%). Một PR làm sai vài câu mà accuracy vẫn ≥ 85% thì job CI hiện tại **không** phát hiện; muốn chặn regression trên PR phải thêm `--baseline` vào workflow |
 
 ---
 
@@ -31,7 +31,13 @@ Nguồn: `reports/load_v2_c1.json`, `load_v2_c10.json`, `load_v2_c50.json`, `loa
 | 50 | 104.33 | 196.8 | 253.2 | 1708.1 | 0.67% (2×503) | ✅ PASS |
 | 100 | 84.93 | 291.3 | **1764.6** | 1958.1 | 1.33% (4×503) | ❌ FAIL (p95 > 500 ms, exit code 1) |
 
-**Nhận xét:** RPS tăng gần tuyến tính từ 1 lên 10 (4.48 → 38.97, gấp khoảng 8.7 lần) và lên 50 (104.33). Lý do là mỗi request chủ yếu *chờ* mock LLM (`asyncio.sleep`), nên một process uvicorn xử lý song song được nhiều request mà latency gần như không đổi (p50 khoảng 190–197 ms). Lên 100 thì **RPS giảm** còn 84.93, p50 tăng lên 291 ms và p95 nhảy lên 1764.6 ms, tức vi phạm SLO. Agent chỉ chạy 1 process Python, một event loop trên một lõi CPU. Ở 100 request song song, phần việc CPU (parse JSON, Pydantic, middleware đo metric, ghi log JSON), cộng với việc load generator chạy cùng máy, bắt đầu tạo hàng đợi. Request phải xếp hàng trước khi được xử lý nên latency tăng còn throughput không tăng thêm. Điểm gãy nằm giữa 50 và 100 concurrent; muốn phục vụ nhiều hơn thì phải scale ngang (nhiều process hoặc instance) thay vì đẩy concurrency vào một process.
+**Nhận xét (theo số đo):**
+- **1 → 10:** concurrency tăng 10 lần, RPS tăng từ 4.48 lên 38.97 (khoảng 8.7 lần), p50 gần như không đổi (190.7 → 192.6 ms). Trong khoảng này RPS tăng **gần tuyến tính**.
+- **10 → 50:** concurrency tăng 5 lần nhưng RPS chỉ tăng từ 38.97 lên 104.33 (khoảng **2.68 lần**), p95 bắt đầu nhích lên (222.5 → 253.2 ms). Mức tăng đã **thấp hơn hẳn tuyến tính**.
+- **50 → 100:** **RPS giảm** còn 84.93, p50 lên 291.3 ms, **p95 lên 1764.6 ms, vượt SLO 500 ms** (FAIL, exit code 1). Error rate không tăng (1.33%), nên vấn đề là latency chứ không phải lỗi.
+- Lưu ý khi đọc: mỗi mức chỉ có 300 request. Ở concurrency 50–100, thời gian chạy chỉ 2.9–3.5 s, nên RPS dễ bị ảnh hưởng bởi giai đoạn khởi động và kết thúc.
+
+**Giả thuyết (chưa được lần đo này xác nhận):** agent develop chạy một process uvicorn (một event loop). Mock LLM chủ yếu là `asyncio.sleep` nên ở concurrency thấp nhiều request chạy song song được. Khi concurrency cao, phần việc CPU của mỗi request (parse JSON, Pydantic, middleware metric, ghi log), hoặc chính `load_test.py` chạy cùng máy, có thể tạo hàng đợi. Lần đo này không ghi CPU của agent hay của load generator, nên chưa xác định được nguyên nhân. Muốn kiểm chứng cần chạy lại với nhiều request hơn (hoặc `--duration`), theo dõi CPU (`top`/`pidstat`), và tách load generator sang máy khác.
 
 ### 2.2 Tail latency (v2, 300 request, concurrency 20, khởi động lại v2 cho mỗi mức)
 
@@ -49,6 +55,40 @@ Nguồn: `reports/load_v2_slow_0.json`, `load_v2_slow_0.03.json`, `load_v2_slow_
 - Percentile cao (p99, rồi p95) nhạy nhất vì nó chỉ ra trải nghiệm của nhóm user tệ nhất. Average là trung bình cộng nên vài request chậm 1.7 s bị "pha loãng" bởi hàng trăm request 190 ms.
 - Đặt SLO theo average sẽ báo "ổn" trong khi 3–10% người dùng phải chờ gần 2 giây. Vì vậy SLO đặt theo p95/p99.
 
+### 2.3 Đọc `/metrics` của agent develop (Exercise 7.1)
+
+Chạy agent develop v2 (`AGENT_VERSION=v2 PORT=8002 python app.py`), gửi 1 câu `/ask` ("Prometheus thu thập metrics như thế nào?", 40 ký tự) và 3 URL lạ (`/wp-admin`, `/.env`, `/a1b2c3`, đều trả 404), rồi `curl -s http://localhost:8002/metrics`. Trích output:
+
+```text
+# TYPE http_requests_total counter
+http_requests_total{method="POST",route="/ask",status="200"} 1.0
+http_requests_total{method="GET",route="unmatched",status="404"} 3.0
+# TYPE agent_in_flight_requests gauge
+agent_in_flight_requests 0.0
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_count{method="POST",route="/ask"} 1.0
+http_request_duration_seconds_sum{method="POST",route="/ask"} 0.18598459199711215
+# TYPE agent_question_length_chars histogram
+agent_question_length_chars_bucket{le="20.0"} 0.0
+agent_question_length_chars_bucket{le="50.0"} 1.0
+...
+agent_question_length_chars_bucket{le="+Inf"} 1.0
+agent_question_length_chars_count 1.0
+agent_question_length_chars_sum 40.0
+```
+
+| Loại | Metric | Giải thích |
+|---|---|---|
+| Counter | `http_requests_total{method,route,status}` | Chỉ tăng, đếm số request theo route và mã trạng thái; dùng `rate()` để ra req/s và error rate |
+| Gauge | `agent_in_flight_requests` | Lên xuống theo số request đang xử lý (tăng khi vào middleware, giảm khi xong); bằng 0 khi scrape lúc không có request |
+| Histogram | `http_request_duration_seconds` | Đếm request vào các bucket latency (0.05 … 5 s, `+Inf`) kèm `_sum` và `_count`; `histogram_quantile()` tính p95/p99 từ các bucket |
+
+Histogram mới **`agent_question_length_chars`** (buckets 20, 50, 100, 200, 500, 1000, 2000) hoạt động đúng: câu hỏi 40 ký tự rơi vào bucket `le="50"` (bucket `le="20"` = 0), `_count 1`, `_sum 40`. Metric này không có label nào, nên chỉ thêm 10 series (8 bucket + `_sum` + `_count`) dù độ dài câu hỏi có vô số giá trị.
+
+**Vì sao middleware dùng `route.path` và gom URL lạ vào `unmatched`:** label nên có ít giá trị, ổn định. `route.path` là *template* do app khai báo (`/ask`, `/health`…), nên số giá trị bị giới hạn bởi số route. URL không khớp route nào bị gom vào một giá trị `unmatched`. Trong lần chạy trên, 3 URL lạ chỉ tạo **1** series counter (`route="unmatched"`, giá trị 3) chứ không phải 3 series.
+
+**Nếu dùng URL thật (`request.url.path`) làm label:** mỗi URL lạ thành một giá trị label mới, nên mỗi giá trị sinh thêm series cho mọi metric có label `route`. Đếm trên output thật: histogram `http_request_duration_seconds` có **14 series cho mỗi giá trị route** (12 bucket + `_sum` + `_count`), cộng ít nhất 1 series của `http_requests_total`. Như vậy mỗi URL lạ thêm khoảng 15 series; bot quét 10.000 URL khác nhau sẽ tạo khoảng 150.000 series mới. Prometheus giữ mỗi series trong RAM và index, nên số series (cardinality) tăng không giới hạn theo traffic rác: tốn RAM, query chậm, có thể làm Prometheus hết bộ nhớ. Số series không tăng theo lượng dữ liệu hữu ích.
+
 ---
 
 ## 3. Benchmark chất lượng (develop, `eval/run_eval.py`, golden dataset 23 câu)
@@ -61,7 +101,7 @@ Nguồn: `reports/eval_v1.json`, `reports/eval_v2.json`, `reports/eval_v2_fixed.
 | Avg tokens / câu | 56.8 | 109.0 | 115.8 |
 | Tổng cost (USD) | 0.000400 | 0.000759 | 0.000809 |
 | Cost / câu đúng (USD) | 0.00040035 | 0.00003616 | 0.00003518 |
-| Quality gate | ❌ FAIL (≥ 80%) | ✅ PASS (≥ 80%, 0 regression so với v1) | ✅ PASS (≥ 100%, 0 regression so với v2) |
+| Quality gate (eval chạy local, không phải CI) | ❌ FAIL (≥ 80%) | ✅ PASS (≥ 80%, 0 regression so với v1) | ✅ PASS (≥ 100%, 0 regression so với v2) |
 
 **Những câu v2 trả lời sai ban đầu và cách sửa:**
 
@@ -70,11 +110,17 @@ Nguồn: `reports/eval_v1.json`, `reports/eval_v2.json`, `reports/eval_v2_fixed.
 | security-02 | JWT khác gì API key trong xác thực? | `token`, `hết hạn`, `chữ ký` | Không có tài liệu nào khớp nên retrieval rỗng và agent trả lời chung chung. Thêm entry `(["jwt", "api key", "xác thực"], ...)` vào `KNOWLEDGE_BASE`: API key là chuỗi cố định không tự hết hạn; JWT là token có chữ ký số, chứa user và thời điểm hết hạn |
 | scaling-03 | Kubernetes HPA scale dựa trên những chỉ số nào? | `cpu`, `memory`, `custom metrics` | Thêm entry `(["hpa", "kubernetes", "autoscal"], ...)`: HPA scale số pod dựa trên CPU, memory hoặc custom metrics (RPS, độ dài hàng đợi) |
 
-Trước khi thêm, mình kiểm tra (bằng `grep` trên golden dataset) rằng các keyword mới chỉ xuất hiện trong đúng 2 câu này, nên không "cướp" retrieval của câu khác. Kết quả: `Câu được cải thiện: 2`, `Câu bị regression: 0`. File `golden_dataset.jsonl` giữ nguyên (`git diff` trống). Phần sửa cũng được chép sang `production/utils/mock_llm.py` để stack Docker dùng cùng knowledge base.
+Trước khi thêm, em kiểm tra (bằng `grep` trên golden dataset) rằng các keyword mới chỉ xuất hiện trong đúng 2 câu này, nên không "cướp" retrieval của câu khác. Kết quả: `Câu được cải thiện: 2`, `Câu bị regression: 0`. File `golden_dataset.jsonl` giữ nguyên (`git diff` trống). Phần sửa cũng được chép sang `production/utils/mock_llm.py` để stack Docker dùng cùng knowledge base.
 
 Lệnh cuối: `python eval/run_eval.py --url http://localhost:8002 --min-accuracy 1.0 --baseline reports/eval_v2.json --out reports/eval_v2_fixed.json` in `Quality gate (accuracy ≥ 100%, không regression): ✅ PASS`, exit code 0.
 
-**Quality gate trong CI:** `.github/workflows/quality-gate.yml` chạy trên mỗi pull request. Job bật agent v2 (`MOCK_ERROR_RATE=0` để eval ổn định) rồi chạy `python eval/run_eval.py --min-accuracy 0.85`. `run_eval.py` trả **exit code 1** khi accuracy dưới ngưỡng hoặc có regression, nên step fail và cả job fail. Bật branch protection "Require status checks to pass" thì PR đó không merge được. Đã kiểm tra hành vi exit code bằng chính lần eval v1 ở trên: accuracy 4.3% cho `(exit code 1)`.
+**Quality gate trong CI.** Cần phân biệt 3 thứ:
+
+1. **Workflow kiểm gì trên PR** (`.github/workflows/quality-gate.yml`): khi có pull request, job bật agent v2 (`MOCK_ERROR_RATE=0` để kết quả ổn định) rồi chạy `python eval/run_eval.py --url http://localhost:8000 --min-accuracy 0.85 --out eval_ci.json`. Job **chỉ kiểm accuracy ≥ 85%**, không truyền `--baseline`, nên **không so regression** với phiên bản trước. `run_eval.py` trả exit code 1 khi accuracy dưới ngưỡng, làm step fail và job fail.
+2. **Kết quả đã có:** workflow này **chưa chạy trên GitHub** vì repo chưa có pull request nào. Hành vi exit code mới kiểm ở local: eval v1 (accuracy 4.3%, ngưỡng mặc định 80%) cho `(exit code 1)`; eval v2 cho exit code 0. Kiểm tra regression (23/23, 0 regression) là kết quả của lần eval **local** với `--baseline reports/eval_v2.json`, không phải của CI.
+3. **Điều kiện để thực sự chặn merge:** job fail chỉ hiện dấu ❌ trên PR. Muốn PR không merge được, chủ repo phải bật branch protection cho `main` ("Require status checks to pass before merging", chọn check `quality-gate / eval`). Repo này hiện **chưa cấu hình** branch protection.
+
+Muốn CI chặn cả regression: lưu `eval_v2_fixed.json` làm baseline trong repo và thêm `--baseline <file>` vào lệnh eval của workflow.
 
 **Trade-off chất lượng / chi phí / latency:**
 - v2 thêm bước retrieval nên prompt dài gần gấp đôi (109 so với 56.8 token mỗi câu), tổng cost gấp khoảng 1.9 lần, p95 eval tăng từ 202 lên 260 ms (thêm khoảng 20 ms retrieval và prompt dài hơn).
@@ -106,6 +152,12 @@ Stack: `docker compose -p k5-day14-observability up -d --build` (2 agent + Nginx
 3. **Input tokens/s (1435) lớn hơn output tokens/s (750)** vì prompt gửi LLM = system prompt + tài liệu retrieval (RAG context) + câu hỏi. Câu trả lời của mock chỉ là một đoạn tài liệu, ngắn hơn toàn bộ prompt.
 4. **`curl http://localhost:8080/metrics` trả `404 Not Found` từ Nginx**, vì `nginx.conf` có `location = /metrics { return 404; }`. `/metrics` chỉ dành cho Prometheus scrape trực tiếp từng agent trong mạng nội bộ Docker (`dns_sd_configs`). Không public ra ngoài vì metrics lộ thông tin nội bộ (route, model, cost, version), và nếu đi qua load balancer thì mỗi lần scrape rơi vào một instance khác nhau, làm số liệu nhảy lung tung.
 
+**Về đơn vị chi phí:** toàn bộ chi phí trong bài là **USD mô phỏng** do mock LLM tính theo bảng giá giả định (`mock-llm-small`: $0.00015 / 1K token input, $0.0006 / 1K token output). Không có khoản tiền thật nào bị tính: LLM là mock, Render dùng gói Free. Có hai cách hiển thị dễ nhầm:
+- **Panel "Cost burn rate" và alert `LLMCostBurnRateHigh`** dùng `sum(rate(llm_cost_usd_total[5m])) * 3600`, tức *tốc độ chi tiêu nếu giữ tải này suốt 1 giờ*. Mỗi request tốn khoảng $0.000033–0.000034 (`reports/load_v2_c1.json`: $0.009905 / 300 request). Ở khoảng 18.7 req/s thì ra khoảng $2.3–2.4/giờ.
+- **Stat "LLM cost (1h)"** dùng `increase(llm_cost_usd_total[1h])`, tức *tổng chi phí mock đã cộng dồn* trong 1 giờ gần nhất. Lúc chụp `grafana-dashboard.png` (sau khoảng 15 phút có tải), stat này là **$0.5984**.
+
+Con số $2.x/giờ trong bài là tốc độ, không phải số tiền đã tiêu. Nó cao hay thấp tuỳ lượng traffic: chạy ít user hơn, hoặc nhìn stat cộng dồn, sẽ ra số dạng $0.x.
+
 **Phát hiện thêm:** ngay ở tải nền 30 user (khoảng 18.7 req/s), `LLMCostBurnRateHigh` **đã firing** (khoảng $2.41/giờ, vượt ngưỡng $2/giờ; pending lúc 15:23:57). Ngưỡng $2/giờ trong `alert_rules.yml` thấp hơn mức chi phí bình thường của chính tải này, nên production thật phải đặt ngưỡng theo budget và traffic dự kiến.
 
 ### 4.2 Thí nghiệm "phá hệ thống"
@@ -129,7 +181,7 @@ Ghi chú khi phân tích:
 **Thí nghiệm E không làm alert nào firing. Phát hiện loại sự cố này trong production bằng cách nào?**
 
 Đổi sang v1 làm chất lượng sụp từ 100% xuống khoảng 4% (theo eval ở mục 3), nhưng mọi metric hạ tầng vẫn xanh. p95 và cost còn *đẹp hơn*, và trong lần chạy này panel "Retrieval hit ratio" vẫn đứng 100%, không phản ánh gì. Sự cố về **chất lượng** không làm request lỗi hay chậm, nên metric "golden signals" không bắt được. Cách phát hiện:
-1. **Eval làm cổng trước khi deploy:** chạy golden dataset trong CI và CD (job `quality-gate`), so `--baseline` với bản đang chạy. Thay đổi v2 sang v1 sẽ bị chặn từ PR (accuracy 4.3%, exit code 1).
+1. **Eval làm cổng trước khi deploy:** chạy golden dataset trên mỗi PR. Với job `quality-gate` hiện tại (chỉ kiểm accuracy ≥ 85%), PR đổi v2 sang v1 sẽ làm job fail vì accuracy chỉ 4.3% (đã thấy exit code 1 khi eval v1 ở local). Tuy vậy, job hiện tại không bắt được những thay đổi làm sai vài câu mà accuracy vẫn ≥ 85%; muốn bắt cần thêm `--baseline`. Job fail chỉ chặn được merge khi `main` bật branch protection, mà repo hiện chưa bật.
 2. **Eval liên tục trên production:** canary hoặc shadow traffic, định kỳ chạy golden dataset vào endpoint thật và đẩy `eval_accuracy` thành metric Prometheus, rồi đặt alert khi nó giảm dưới SLO.
 3. **Theo dõi tín hiệu gián tiếp:** token/request giảm đột ngột (ở đây giảm khoảng 53%), `agent_info{version}` thay đổi ngoài lịch deploy, tỉ lệ retrieval rỗng; thêm feedback người dùng (thumbs down, tỉ lệ hỏi lại) và LLM-as-judge chấm mẫu ngẫu nhiên.
 
